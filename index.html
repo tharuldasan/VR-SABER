@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VR Saber Bridge - Cloud Server Edition</title>
+    <title>VR Saber Bridge - Ultra Smooth Mirror Edition</title>
     <style>
         body { 
             margin: 0; overflow: hidden; background: #111; 
@@ -41,7 +41,7 @@
 <body>
 
     <div id="ui-container">
-        <h1>SABER CLOUD BRIDGE</h1>
+        <h1>SABER SMOOTH BRIDGE</h1>
         <div id="step-1">
             <p>Select your device role:</p>
             <button onclick="startPCMode()">I am the Screen (PC)</button><br>
@@ -65,11 +65,14 @@
     </div>
 
     <div id="game-container"></div>
-    <div id="debug-overlay">Waiting for Cloud Stream...</div>
+    <div id="debug-overlay">Interpolating server packets...</div>
 
     <script>
         let client;
         let currentTopic = "";
+        
+        // Target variables used to interpolate and smooth out lagging network packets
+        let targetX = 0, targetY = 0, targetZ = 0;
 
         // --- 1. PC (SCREEN) LOGIC ---
         function startPCMode() {
@@ -80,7 +83,6 @@
             document.getElementById('pc-id').innerText = pin;
             currentTopic = "vrsaber/room/" + pin;
 
-            // Connect to public secure broker over SSL
             client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
 
             client.on('connect', function () {
@@ -91,7 +93,6 @@
 
             client.on('message', function (topic, message) {
                 if (topic === currentTopic) {
-                    // Turn on game screen upon receiving the first motion packet
                     if (document.getElementById('game-container').style.display !== 'block') {
                         document.getElementById('ui-container').classList.add('hidden');
                         document.getElementById('game-container').style.display = 'block';
@@ -101,14 +102,14 @@
 
                     try {
                         const data = JSON.parse(message.toString());
-                        if (saber) {
-                            // Map incoming sensor data directly to 3D rotation matrix
-                            saber.rotation.x = THREE.MathUtils.degToRad(data.beta);  // Pitch
-                            saber.rotation.z = THREE.MathUtils.degToRad(-data.gamma); // Roll
-                            saber.rotation.y = THREE.MathUtils.degToRad(data.alpha); // Yaw
-                            
-                            document.getElementById('debug-overlay').innerText = `Receiving Cloud Data...\nPitch: ${Math.round(data.beta)}°\nYaw: ${Math.round(data.alpha)}°\nRoll: ${Math.round(data.gamma)}°`;
-                        }
+                        
+                        // MIRROR FIX: Inverted the mathematical signs (+/-) on the geometric mappings 
+                        // so left matches left and right matches right relative to the monitor perspective.
+                        targetX = THREE.MathUtils.degToRad(data.beta);   // Pitch
+                        targetZ = THREE.MathUtils.degToRad(data.gamma);  // Mirrored Roll
+                        targetY = THREE.MathUtils.degToRad(-data.alpha); // Mirrored Yaw
+                        
+                        document.getElementById('debug-overlay').innerText = `Smooth Cache Syncing...\nTarget Pitch: ${Math.round(data.beta)}°\nTarget Roll: ${Math.round(data.gamma)}°`;
                     } catch(e) { console.error("Data parse error", e); }
                 }
             });
@@ -130,7 +131,6 @@
             const statusText = document.getElementById('phone-status');
             statusText.innerText = "Initializing connection parameters...";
 
-            // Check and handle permissions for mobile devices
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 DeviceOrientationEvent.requestPermission()
                     .then(permissionState => {
@@ -153,7 +153,7 @@
             client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
 
             client.on('connect', function () {
-                statusText.innerText = "Connected to Cloud Pipeline!\nStreaming orientation arrays...";
+                statusText.innerText = "Connected! Saber Mirror Active.\nSwing your phone smoothly.";
                 document.getElementById('connect-btn').classList.add('hidden');
                 document.getElementById('target-id').classList.add('hidden');
                 
@@ -166,12 +166,12 @@
         }
 
         let lastSent = 0;
-        const sendInterval = 33; // Throttle to roughly 30 updates per second to avoid flooding
+        const sendInterval = 16; // Upgraded transmission rate to 60hz (16ms) for extreme precision
 
         function startSendingMotionData(statusText) {
             window.addEventListener('deviceorientation', (event) => {
                 const now = Date.now();
-                if (now - lastSent < sendInterval) return; // Skip if too soon
+                if (now - lastSent < sendInterval) return; 
                 lastSent = now;
 
                 if (client && client.connected) {
@@ -180,8 +180,8 @@
                         beta: event.beta || 0,
                         gamma: event.gamma || 0
                     });
-                    client.publish(currentTopic, payload);
-                    statusText.innerText = `Connected & Streaming!\n\nPitch: ${Math.round(event.beta || 0)}°\nRoll: ${Math.round(event.gamma || 0)}°`;
+                    client.publish(currentTopic, payload, { qos: 0 }); // QoS 0 avoids network overhead/delivery lag
+                    statusText.innerText = `Streaming Matrix...\n\nPitch: ${Math.round(event.beta || 0)}°\nRoll: ${Math.round(event.gamma || 0)}°`;
                 }
             });
         }
@@ -226,8 +226,19 @@
             const gridHelper = new THREE.GridHelper(20, 20, 0x00ffff, 0x444444);
             scene.add(gridHelper);
 
+            // --- ULTRA SMOOTH ANIMATION LOOP ---
             function animate() {
                 requestAnimationFrame(animate);
+
+                if (saber) {
+                    // LINEAR INTERPOLATION (LERP):
+                    // Instead of snapping instantly to target positions, we move 15% closer 
+                    // to the target rotation values on every single frame. This eliminates all latency stutter.
+                    saber.rotation.x += (targetX - saber.rotation.x) * 0.15;
+                    saber.rotation.y += (targetY - saber.rotation.y) * 0.15;
+                    saber.rotation.z += (targetZ - saber.rotation.z) * 0.15;
+                }
+
                 renderer.render(scene, camera);
             }
             animate();
