@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VR Saber Bridge - PIN Edition</title>
+    <title>VR Saber Bridge - Cloud Server Edition</title>
     <style>
         body { 
             margin: 0; overflow: hidden; background: #111; 
@@ -25,7 +25,6 @@
             padding: 15px; margin: 10px 0; width: 60%; text-align: center; font-size: 24px; font-weight: bold;
             letter-spacing: 5px;
         }
-        /* Hide arrows on number input */
         input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
         
         #game-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; }
@@ -36,13 +35,13 @@
         }
         .hidden { display: none !important; }
     </style>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
     <div id="ui-container">
-        <h1>SABER BRIDGE</h1>
+        <h1>SABER CLOUD BRIDGE</h1>
         <div id="step-1">
             <p>Select your device role:</p>
             <button onclick="startPCMode()">I am the Screen (PC)</button><br>
@@ -50,62 +49,68 @@
         </div>
 
         <div id="pc-ui" class="hidden">
-            <p>Waiting for phone connection...</p>
-            <p>Enter this PIN on your phone:</p>
-            <h1 id="pc-id" style="color: #fff; background: #222; padding: 20px; font-size: 48px; margin: 10px 0;">----</h1>
+            <p>Connecting to Cloud Server...</p>
+            <div id="pc-ready" class="hidden">
+                <p>Enter this PIN on your phone:</p>
+                <h1 id="pc-id" style="color: #fff; background: #222; padding: 20px; font-size: 48px; margin: 10px 0;">----</h1>
+            </div>
         </div>
 
         <div id="phone-ui" class="hidden">
             <p>Enter the 4-digit PIN from your PC:</p>
-            <input type="number" id="target-id" placeholder="1234" maxlength="4">
+            <input type="number" id="target-id" placeholder="1234">
             <button id="connect-btn" onclick="connectToPC()">Connect</button>
             <p id="phone-status" style="font-size: 14px; color: #ffeb3b; margin-top: 20px; white-space: pre-wrap;"></p>
         </div>
     </div>
 
     <div id="game-container"></div>
-    <div id="debug-overlay">Waiting for motion data...</div>
+    <div id="debug-overlay">Waiting for Cloud Stream...</div>
 
     <script>
-        let peer;
-        let conn;
-        const PREFIX = "vrsaber-"; // Used to prevent collisions on the public PeerJS server
+        let client;
+        let currentTopic = "";
 
         // --- 1. PC (SCREEN) LOGIC ---
         function startPCMode() {
             document.getElementById('step-1').classList.add('hidden');
             document.getElementById('pc-ui').classList.remove('hidden');
             
-            // Generate a random 4-digit PIN
             const pin = Math.floor(1000 + Math.random() * 9000);
             document.getElementById('pc-id').innerText = pin;
-            
-            // Initialize PeerJS with the prefixed PIN
-            peer = new Peer(PREFIX + pin); 
+            currentTopic = "vrsaber/room/" + pin;
 
-            peer.on('connection', function(connection) {
-                conn = connection;
-                
-                // Hide UI and show Game & Debug
-                document.getElementById('ui-container').classList.add('hidden');
-                document.getElementById('game-container').style.display = 'block';
-                const debugScreen = document.getElementById('debug-overlay');
-                debugScreen.style.display = 'block';
-                
-                init3DScene();
+            // Connect to public secure broker over SSL
+            client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
 
-                // Listen for data from phone
-                conn.on('data', function(data) {
-                    if(data.type === 'rotation' && saber) {
-                        // Apply rotation
-                        saber.rotation.x = THREE.MathUtils.degToRad(data.beta); // Pitch
-                        saber.rotation.z = THREE.MathUtils.degToRad(-data.gamma); // Roll
-                        saber.rotation.y = THREE.MathUtils.degToRad(data.alpha); // Yaw
-                        
-                        // Update PC Debug Text so you know data is arriving
-                        debugScreen.innerText = `Receiving Data from Phone...\nPitch (Beta): ${Math.round(data.beta)}°\nYaw (Alpha): ${Math.round(data.alpha)}°\nRoll (Gamma): ${Math.round(data.gamma)}°`;
+            client.on('connect', function () {
+                document.getElementById('pc-ui').firstElementChild.innerText = "Cloud Connection Established!";
+                document.getElementById('pc-ready').classList.remove('hidden');
+                client.subscribe(currentTopic);
+            });
+
+            client.on('message', function (topic, message) {
+                if (topic === currentTopic) {
+                    // Turn on game screen upon receiving the first motion packet
+                    if (document.getElementById('game-container').style.display !== 'block') {
+                        document.getElementById('ui-container').classList.add('hidden');
+                        document.getElementById('game-container').style.display = 'block';
+                        document.getElementById('debug-overlay').style.display = 'block';
+                        init3DScene();
                     }
-                });
+
+                    try {
+                        const data = JSON.parse(message.toString());
+                        if (saber) {
+                            // Map incoming sensor data directly to 3D rotation matrix
+                            saber.rotation.x = THREE.MathUtils.degToRad(data.beta);  // Pitch
+                            saber.rotation.z = THREE.MathUtils.degToRad(-data.gamma); // Roll
+                            saber.rotation.y = THREE.MathUtils.degToRad(data.alpha); // Yaw
+                            
+                            document.getElementById('debug-overlay').innerText = `Receiving Cloud Data...\nPitch: ${Math.round(data.beta)}°\nYaw: ${Math.round(data.alpha)}°\nRoll: ${Math.round(data.gamma)}°`;
+                        }
+                    } catch(e) { console.error("Data parse error", e); }
+                }
             });
         }
 
@@ -113,7 +118,6 @@
         function startPhoneMode() {
             document.getElementById('step-1').classList.add('hidden');
             document.getElementById('phone-ui').classList.remove('hidden');
-            peer = new Peer();
         }
 
         function connectToPC() {
@@ -124,60 +128,60 @@
             }
 
             const statusText = document.getElementById('phone-status');
-            statusText.innerText = "Connecting to PC...";
-            
-            // Connect using the prefixed PIN
-            conn = peer.connect(PREFIX + enteredPin);
+            statusText.innerText = "Initializing connection parameters...";
 
-            conn.on('open', function() {
+            // Check and handle permissions for mobile devices
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission()
+                    .then(permissionState => {
+                        if (permissionState === 'granted') {
+                            initiateCloudConnection(enteredPin, statusText);
+                        } else {
+                            statusText.innerText = "Permission Denied: Cannot access gyro.";
+                        }
+                    })
+                    .catch(err => { statusText.innerText = "Sensor Error: " + err; });
+            } else {
+                initiateCloudConnection(enteredPin, statusText);
+            }
+        }
+
+        function initiateCloudConnection(pin, statusText) {
+            statusText.innerText = "Reaching out to cloud server...";
+            currentTopic = "vrsaber/room/" + pin;
+
+            client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+
+            client.on('connect', function () {
+                statusText.innerText = "Connected to Cloud Pipeline!\nStreaming orientation arrays...";
                 document.getElementById('connect-btn').classList.add('hidden');
                 document.getElementById('target-id').classList.add('hidden');
                 
-                // Ask for permission for motion sensors (Mandatory for iOS)
-                if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                    statusText.innerText = "Connection found.\nTap anywhere on the screen to allow Motion Sensors.";
-                    
-                    // iOS requires a physical click to grant permissions
-                    document.body.addEventListener('click', function requestPerms() {
-                        DeviceOrientationEvent.requestPermission()
-                            .then(permissionState => {
-                                if (permissionState === 'granted') {
-                                    startSendingMotionData(statusText);
-                                    document.body.removeEventListener('click', requestPerms);
-                                } else {
-                                    statusText.innerText = "Motion permission denied. Cannot play.";
-                                }
-                            })
-                            .catch(console.error);
-                    }, { once: true });
-                } else {
-                    // Android & non-iOS devices usually don't need a permission prompt
-                    startSendingMotionData(statusText);
-                }
+                startSendingMotionData(statusText);
             });
 
-            conn.on('error', function(err) {
-                statusText.innerText = "Connection Error. Wrong PIN?";
+            client.on('error', function (err) {
+                statusText.innerText = "Could not establish server pipeline: " + err;
             });
         }
 
+        let lastSent = 0;
+        const sendInterval = 33; // Throttle to roughly 30 updates per second to avoid flooding
+
         function startSendingMotionData(statusText) {
             window.addEventListener('deviceorientation', (event) => {
-                // If alpha/beta/gamma are null, the phone is blocking sensors (usually due to lack of HTTPS)
-                if (event.alpha === null || event.beta === null || event.gamma === null) {
-                    statusText.innerText = "ERROR: Sensors are blocked.\nMake sure you are using HTTPS (secure connection).";
-                    return;
-                }
+                const now = Date.now();
+                if (now - lastSent < sendInterval) return; // Skip if too soon
+                lastSent = now;
 
-                if (conn && conn.open) {
-                    conn.send({
-                        type: 'rotation',
+                if (client && client.connected) {
+                    const payload = JSON.stringify({
                         alpha: event.alpha || 0,
                         beta: event.beta || 0,
                         gamma: event.gamma || 0
                     });
-                    // Update Phone Debug Text so you know it's working
-                    statusText.innerText = `Connected!\n\nSending Motion:\nPitch: ${Math.round(event.beta)}°\nRoll: ${Math.round(event.gamma)}°`;
+                    client.publish(currentTopic, payload);
+                    statusText.innerText = `Connected & Streaming!\n\nPitch: ${Math.round(event.beta || 0)}°\nRoll: ${Math.round(event.gamma || 0)}°`;
                 }
             });
         }
@@ -201,7 +205,6 @@
             directionalLight.position.set(0, 1, 1);
             scene.add(directionalLight);
 
-            // Group acts as the pivot point
             const saberGroup = new THREE.Group();
             
             const handleGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.5, 16);
@@ -216,7 +219,6 @@
 
             saberGroup.add(handle);
             saberGroup.add(blade);
-
             saberGroup.position.set(0, 0.5, 1.5); 
             scene.add(saberGroup);
             saber = saberGroup; 
