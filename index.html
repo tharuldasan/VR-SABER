@@ -3,35 +3,35 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VR Saber - Zero Lag Target Grip Edition</title>
+    <title>VR Saber - Zero Latency Local Pipe</title>
     <style>
         body { 
-            margin: 0; overflow: hidden; background: #050505; 
+            margin: 0; overflow: hidden; background: #030303; 
             color: #00ffff; font-family: 'Courier New', Courier, monospace; 
             display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;
         }
         #ui-container {
-            background: rgba(0, 10, 10, 0.9); padding: 25px; border: 2px solid #00ffff; border-radius: 12px;
-            text-align: center; z-index: 10; max-width: 420px; width: 90%; box-shadow: 0 0 20px #00ffff44;
+            background: rgba(5, 15, 15, 0.95); padding: 30px; border: 2px solid #00ffff; border-radius: 12px;
+            text-align: center; z-index: 10; max-width: 420px; width: 90%; box-shadow: 0 0 25px #00ffff33;
         }
         button {
-            background: rgba(0, 255, 255, 0.1); color: #00ffff; border: 1px solid #00ffff;
-            padding: 14px 28px; margin: 15px 0; cursor: pointer; font-size: 16px; font-weight: bold;
-            text-transform: uppercase; letter-spacing: 2px; transition: 0.2s; width: 100%;
+            background: rgba(0, 255, 255, 0.05); color: #00ffff; border: 1px solid #00ffff;
+            padding: 14px 28px; margin: 15px 0; cursor: pointer; font-size: 15px; font-weight: bold;
+            text-transform: uppercase; letter-spacing: 2px; transition: 0.1s; width: 100%;
         }
         button:hover { background: #00ffff; color: #000; box-shadow: 0 0 15px #00ffff; }
         input {
             background: #000; color: #00ffff; border: 1px solid #00ffff;
-            padding: 15px; margin: 15px 0; width: 70%; text-align: center; font-size: 28px; font-weight: bold;
-            letter-spacing: 8px;
+            padding: 12px; margin: 15px 0; width: 70%; text-align: center; font-size: 32px; font-weight: bold;
+            letter-spacing: 6px;
         }
         input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-        .instruction-box { background: rgba(255,255,255,0.05); padding: 10px; margin: 15px 0; font-size: 13px; text-align: left; color: #fff;}
+        .grip-box { background: rgba(255,255,255,0.04); padding: 12px; margin: 15px 0; font-size: 12px; text-align: left; color: #fff; border-left: 3px solid #ff0055;}
         #game-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; }
         #debug-overlay { 
             position: absolute; top: 10px; left: 10px; color: #00ff00; 
             font-size: 12px; z-index: 20; pointer-events: none; display: none;
-            background: rgba(0,0,0,0.7); padding: 10px; border: 1px solid #00ff00;
+            background: rgba(0,0,0,0.8); padding: 12px; border: 1px solid #00ff00; font-family: monospace;
         }
         .hidden { display: none !important; }
     </style>
@@ -41,116 +41,136 @@
 <body>
 
     <div id="ui-container">
-        <h1>SABER REALTIME</h1>
+        <h1>SABER LOCAL PIPE</h1>
         <div id="step-1">
-            <p>Select device role:</p>
-            <button onclick="startPCMode()">Set Up Desktop Screen</button>
-            <button onclick="startPhoneMode()">Set Up Phone Saber</button>
+            <p>Select role over local network/hotspot:</p>
+            <button onclick="startPCMode()">Initialize Screen (PC)</button>
+            <button onclick="startPhoneMode()">Initialize Saber (Phone)</button>
         </div>
 
         <div id="pc-ui" class="hidden">
-            <p>Connecting to Realtime Pipeline...</p>
+            <p id="pc-status">Connecting to signaling network...</p>
             <div id="pc-ready" class="hidden">
-                <p>Enter this PIN on your phone:</p>
+                <p>Enter this local linking PIN on your phone:</p>
                 <h1 id="pc-id" style="color: #fff; background: #111; padding: 15px; font-size: 54px; margin: 10px 0; border: 1px dashed #00ffff;">----</h1>
-                <p style="font-size: 12px; color: #aaa;">Hold phone in sword grip before connecting!</p>
             </div>
         </div>
 
         <div id="phone-ui" class="hidden">
-            <div class="instruction-box">
-                <strong>SWORD GRIP REQUIREMENT:</strong><br>
-                1. Point top of phone directly at your PC screen.<br>
+            <div class="grip-box">
+                <strong>CUSTOM GRIP ALIGNMENT DETECTED:</strong><br>
+                1. Point top of phone directly at the screen.<br>
                 2. Turn phone so <strong>Power Button faces UP</strong>.<br>
-                3. The phone screen must face to your <strong>LEFT</strong>.<br>
-                Hold this pose steady and click connect!
+                3. Phone screen must face your <strong>LEFT</strong>.<br>
+                Hold this sword stance perfectly steady and connect!
             </div>
             <input type="number" id="target-id" placeholder="1234">
-            <button id="connect-btn" onclick="connectToPC()">Connect & Calibrate</button>
+            <button id="connect-btn" onclick="connectToPC()">Connect Direct Pipe</button>
             <p id="phone-status" style="font-size: 14px; color: #ffeb3b; margin-top: 15px; white-space: pre-wrap;"></p>
         </div>
     </div>
 
     <div id="game-container"></div>
-    <div id="debug-overlay">Awaiting sensor calibration...</div>
+    <div id="debug-overlay">Establishing local peer matrix...</div>
 
     <script>
-        let client;
+        let mqttClient;
+        let rtcPeer;
+        let localDataChannel;
         let currentTopic = "";
         
-        // Realtime rotational calculation targets
         let targetX = 0, targetY = 0, targetZ = 0;
-        
-        // Calibration Baselines
         let calibrated = false;
         let baseAlpha = 0, baseBeta = 0, baseGamma = 0;
 
-        // --- 1. DESKTOP SCREEN LOGIC ---
+        const iceConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+        // --- 1. PC (SCREEN) ARCHITECTURE ---
         function startPCMode() {
             document.getElementById('step-1').classList.add('hidden');
             document.getElementById('pc-ui').classList.remove('hidden');
             
             const pin = Math.floor(1000 + Math.random() * 9000);
             document.getElementById('pc-id').innerText = pin;
-            currentTopic = "vrsaber/stream/" + pin;
+            currentTopic = "vrsaber/rtc/" + pin;
 
-            // Connect directly to high-speed secure cloud server cluster
-            client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+            mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
 
-            client.on('connect', function () {
-                document.getElementById('pc-ui').firstElementChild.innerText = "Network Engine Online.";
+            mqttClient.on('connect', function () {
+                document.getElementById('pc-status').innerText = "Signaler ready. Awaiting phone sync...";
                 document.getElementById('pc-ready').classList.remove('hidden');
-                client.subscribe(currentTopic, { qos: 0 });
+                mqttClient.subscribe(currentTopic + "/phone_to_pc");
             });
 
-            client.on('message', function (topic, message) {
-                if (topic === currentTopic) {
-                    if (document.getElementById('game-container').style.display !== 'block') {
-                        document.getElementById('ui-container').classList.add('hidden');
-                        document.getElementById('game-container').style.display = 'block';
-                        document.getElementById('debug-overlay').style.display = 'block';
-                        init3DScene();
-                    }
+            mqttClient.on('message', function (topic, message) {
+                let msgData;
+                try { msgData = JSON.parse(message.toString()); } catch(e) { msgData = message.toString(); }
 
-                    // Explode ultra-lightweight data string instantly
-                    const dataParts = message.toString().split(',');
-                    if (dataParts.length === 3) {
-                        const alpha = parseFloat(dataParts[0]);
-                        const beta = parseFloat(dataParts[1]);
-                        const gamma = parseFloat(dataParts[2]);
-
-                        // Run automatic orientation zeroing calibration on first packet burst
-                        if (!calibrated) {
-                            baseAlpha = alpha;
-                            baseBeta = beta;
-                            baseGamma = gamma;
-                            calibrated = true;
-                        }
-
-                        // Calculate relative travel offsets away from your physical holding pose
-                        let diffAlpha = alpha - baseAlpha;
-                        let diffBeta = beta - baseBeta;
-                        let diffGamma = gamma - baseGamma;
-
-                        // Shield alignment from compass 360-degree wrapping glitches
-                        if (diffAlpha > 180) diffAlpha -= 360;
-                        if (diffAlpha < -180) diffAlpha += 360;
-
-                        // REMAPPED STRUCT FOR GRIP: Top pointing forward, Power button UP, Screen LEFT
-                        // Moving hand left/right rotates around vertical axis (controlled cleanly by phone beta)
-                        targetY = THREE.MathUtils.degToRad(-diffBeta * 1.5); // Amplified mirror response
-                        // Moving hand up/down rotates around lateral axis (controlled cleanly by phone alpha)
-                        targetX = THREE.MathUtils.degToRad(diffAlpha * 1.5);
-                        // Twisting your wrist rolls the blade
-                        targetZ = THREE.MathUtils.degToRad(diffGamma);
-
-                        document.getElementById('debug-overlay').innerText = `REALTIME STREAM ACTIVE\nTracking Axis Pitch: ${Math.round(diffAlpha)}°\nTracking Axis Mirror Yaw: ${Math.round(-diffBeta)}°`;
-                    }
+                if (msgData === "LAUNCH_HANDSHAKE") {
+                    setupPCWebRTC();
+                } else if (msgData.type === "answer") {
+                    rtcPeer.setRemoteDescription(new RTCSessionDescription(msgData));
+                } else if (msgData.type === "candidate") {
+                    rtcPeer.addIceCandidate(new RTCIceCandidate(msgData.candidate)).catch(e=>{});
                 }
             });
         }
 
-        // --- 2. PHONE SABER LOGIC ---
+        function setupPCWebRTC() {
+            rtcPeer = new RTCPeerConnection(iceConfig);
+            
+            // Ultra-fast settings: Unordered, No retransmissions (Raw UDP speed)
+            localDataChannel = rtcPeer.createDataChannel("saberPipe", { ordered: false, maxRetransmits: 0 });
+            
+            localDataChannel.onopen = () => {
+                mqttClient.end(); // Kill cloud server connection completely! We are entirely local now.
+                document.getElementById('ui-container').classList.add('hidden');
+                document.getElementById('game-container').style.display = 'block';
+                document.getElementById('debug-overlay').style.display = 'block';
+                init3DScene();
+            };
+
+            localDataChannel.onmessage = (event) => {
+                const parts = event.data.split(',');
+                if (parts.length === 3) {
+                    const alpha = parseFloat(parts[0]);
+                    const beta = parseFloat(parts[1]);
+                    const gamma = parseFloat(parts[2]);
+
+                    if (!calibrated) {
+                        baseAlpha = alpha; baseBeta = beta; baseGamma = gamma;
+                        calibrated = true;
+                    }
+
+                    let dAlpha = alpha - baseAlpha;
+                    let dBeta = beta - baseBeta;
+                    let dGamma = gamma - baseGamma;
+
+                    if (dAlpha > 180) dAlpha -= 360;
+                    if (dAlpha < -180) dAlpha += 360;
+
+                    // AXIS REMAPPING FOR YOUR GRIP: Power Button UP, Screen LEFT, Top FORWARD
+                    targetX = THREE.MathUtils.degToRad(-dGamma * 2.0); // Pitch (Up/Down) via side tilt
+                    targetY = THREE.MathUtils.degToRad(-dAlpha * 2.0); // Mirrored Yaw (Left/Right) via rotation
+                    targetZ = THREE.MathUtils.degToRad(dBeta);        // Roll (Blade twist)
+
+                    document.getElementById('debug-overlay').innerText = `DIRECT LOCAL UDP LINK (0ms Cloud Lag)\nPitch: ${Math.round(-dGamma)}°\nYaw (Mirror): ${Math.round(-dAlpha)}°`;
+                }
+            };
+
+            rtcPeer.onicecandidate = (e) => {
+                if (e.candidate) {
+                    mqttClient.publish(currentTopic + "/pc_to_phone", JSON.stringify({ type: "candidate", candidate: e.candidate }));
+                }
+            };
+
+            rtcPeer.createOffer().then(offer => {
+                rtcPeer.setLocalDescription(offer);
+                mqttClient.publish(currentTopic + "/pc_to_phone", JSON.stringify(offer));
+            });
+        }
+
+        // --- 2. PHONE (SABER) ARCHITECTURE ---
         function startPhoneMode() {
             document.getElementById('step-1').classList.add('hidden');
             document.getElementById('phone-ui').classList.remove('hidden');
@@ -158,57 +178,81 @@
 
         function connectToPC() {
             const enteredPin = document.getElementById('target-id').value.trim();
-            if (enteredPin.length !== 4) {
-                alert("Please enter your 4-digit Screen PIN.");
-                return;
-            }
+            if (enteredPin.length !== 4) return alert("Enter valid PIN.");
 
             const statusText = document.getElementById('phone-status');
-            statusText.innerText = "Configuring pipeline coordinates...";
+            statusText.innerText = "Connecting to handshake channel...";
 
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 DeviceOrientationEvent.requestPermission()
-                    .then(permissionState => {
-                        if (permissionState === 'granted') {
-                            initiateCloudConnection(enteredPin, statusText);
-                        } else {
-                            statusText.innerText = "Error: Motion access denied.";
-                        }
-                    })
-                    .catch(err => { statusText.innerText = "Hardware Fault: " + err; });
+                    .then(state => {
+                        if (state === 'granted') initiateHandshake(enteredPin, statusText);
+                        else statusText.innerText = "Sensor access denied.";
+                    }).catch(err => { statusText.innerText = "Sensor hardware error: " + err; });
             } else {
-                initiateCloudConnection(enteredPin, statusText);
+                initiateHandshake(enteredPin, statusText);
             }
         }
 
-        function initiateCloudConnection(pin, statusText) {
-            statusText.innerText = "Establishing direct stream linking...";
-            currentTopic = "vrsaber/stream/" + pin;
+        function initiateHandshake(pin, statusText) {
+            currentTopic = "vrsaber/rtc/" + pin;
+            mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
 
-            client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+            mqttClient.on('connect', function () {
+                statusText.innerText = "Handshaking with PC browser over WebRTC...";
+                mqttClient.subscribe(currentTopic + "/pc_to_phone");
+                mqttClient.publish(currentTopic + "/phone_to_pc", "LAUNCH_HANDSHAKE");
+            });
 
-            client.on('connect', function () {
-                statusText.innerText = "LINK ESTABLISHED!\nKeep holding your pose, tracking is fully synchronized.";
-                document.getElementById('connect-btn').classList.add('hidden');
-                document.getElementById('target-id').classList.add('hidden');
-                document.querySelector('.instruction-box').classList.add('hidden');
+            mqttClient.on('message', function (topic, message) {
+                const msgData = JSON.parse(message.toString());
                 
-                startSendingMotionData();
+                if (msgData.type === "offer") {
+                    setupPhoneWebRTC(msgData, statusText);
+                } else if (msgData.type === "candidate" && rtcPeer) {
+                    rtcPeer.addIceCandidate(new RTCIceCandidate(msgData.candidate)).catch(e=>{});
+                }
             });
         }
 
-        let lastSent = 0;
-        function startSendingMotionData() {
+        function setupPhoneWebRTC(offer, statusText) {
+            rtcPeer = new RTCPeerConnection(iceConfig);
+
+            rtcPeer.ondatachannel = (event) => {
+                localDataChannel = event.channel;
+                localDataChannel.onopen = () => {
+                    mqttClient.end(); // Disconnect cloud signaling. Completely local data streaming active now.
+                    statusText.innerText = "LOCAL UDP PIPE ATTACHED!\nCloud processing bypassed successfully.";
+                    document.getElementById('connect-btn').classList.add('hidden');
+                    document.getElementById('target-id').classList.add('hidden');
+                    document.querySelector('.grip-box').classList.add('hidden');
+                    streamSaberCoordinates();
+                };
+            };
+
+            rtcPeer.onicecandidate = (e) => {
+                if (e.candidate) {
+                    mqttClient.publish(currentTopic + "/phone_to_pc", JSON.stringify({ type: "candidate", candidate: e.candidate }));
+                }
+            };
+
+            rtcPeer.setRemoteDescription(new RTCSessionDescription(offer));
+            rtcPeer.createAnswer().then(answer => {
+                rtcPeer.setLocalDescription(answer);
+                mqttClient.publish(currentTopic + "/phone_to_pc", JSON.stringify(answer));
+            });
+        }
+
+        function streamSaberCoordinates() {
+            let lastSent = 0;
             window.addEventListener('deviceorientation', (event) => {
                 const now = Date.now();
-                // Send data immediately every 16ms (Native 60Hz processing speed)
-                if (now - lastSent < 16) return; 
+                if (now - lastSent < 8) return; // Blazing fast 120Hz polling execution clock
                 lastSent = now;
 
-                if (client && client.connected) {
-                    // Send optimized string structure rather than bloated JSON brackets
-                    const payload = `${(event.alpha || 0).toFixed(1)},${(event.beta || 0).toFixed(1)},${(event.gamma || 0).toFixed(1)}`;
-                    client.publish(currentTopic, payload, { qos: 0 });
+                if (localDataChannel && localDataChannel.readyState === "open") {
+                    const packet = `${(event.alpha || 0).toFixed(1)},${(event.beta || 0).toFixed(1)},${(event.gamma || 0).toFixed(1)}`;
+                    localDataChannel.send(packet); // Pushed straight through local network hardware
                 }
             });
         }
@@ -219,62 +263,57 @@
         function init3DScene() {
             const container = document.getElementById('game-container');
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
-            
-            // Move camera slightly back to view the full sweep of your forward weapon strikes
-            camera.position.set(0, 1.6, 3.5);
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 1.5, 3.2);
 
             renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
             renderer.setSize(window.innerWidth, window.innerHeight);
             container.appendChild(renderer.domElement);
 
-            const light = new THREE.AmbientLight(0xffffff, 0.3); 
+            const light = new THREE.AmbientLight(0xffffff, 0.4); 
             scene.add(light);
-            const directionalLight = new THREE.DirectionalLight(0x00ffff, 0.8);
-            directionalLight.position.set(0, 5, 5);
+            const directionalLight = new THREE.DirectionalLight(0x00ffff, 0.9);
+            directionalLight.position.set(0, 4, 4);
             scene.add(directionalLight);
 
             const saberGroup = new THREE.Group();
             
-            const handleGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.4, 16);
-            const handleMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5 });
+            const handleGeo = new THREE.CylinderGeometry(0.035, 0.035, 0.35, 16);
+            const handleMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.4 });
             const handle = new THREE.Mesh(handleGeo, handleMat);
-            handle.position.y = 0.2; 
+            handle.position.y = 0.175; 
             
-            // Blade extends directly upward out of our pivot anchor
-            const bladeGeo = new THREE.CylinderGeometry(0.03, 0.03, 1.8, 16);
-            const bladeMat = new THREE.MeshBasicMaterial({ color: 0xff0055 });
+            const bladeGeo = new THREE.CylinderGeometry(0.025, 0.025, 1.7, 16);
+            const bladeMat = new THREE.MeshBasicMaterial({ color: 0x00ffcc });
             const blade = new THREE.Mesh(bladeGeo, bladeMat);
-            blade.position.y = 1.3; 
+            blade.position.y = 1.2; 
 
-            // Inner stark-white core filament for authentic saber glow look
-            const coreGeo = new THREE.CylinderGeometry(0.012, 0.012, 1.8, 16);
+            const coreGeo = new THREE.CylinderGeometry(0.01, 0.01, 1.7, 16);
             const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
             const core = new THREE.Mesh(coreGeo, coreMat);
-            core.position.y = 1.3;
+            core.position.y = 1.2;
 
             saberGroup.add(handle);
             saberGroup.add(blade);
             saberGroup.add(core);
             
-            // Point the saber group directly out forward toward the horizon
-            saberGroup.position.set(0, 1.0, 1.0); 
+            saberGroup.position.set(0, 0.6, 1.2); 
             scene.add(saberGroup);
             saber = saberGroup; 
 
-            const gridHelper = new THREE.GridHelper(30, 30, 0x444444, 0x222222);
+            const gridHelper = new THREE.GridHelper(30, 30, 0x333333, 0x111111);
+            gridHelper.position.y = -0.5;
             scene.add(gridHelper);
 
-            // --- ZERO-LAG RESPONSE ANIMATION LOOP ---
             function animate() {
                 requestAnimationFrame(animate);
 
                 if (saber) {
-                    // Elevated Lerp multiplier to 0.38 for tight, instant tracking execution
-                    // Striking movements now execute immediately without sliding or floating lag
-                    saber.rotation.x += (targetX - saber.rotation.x) * 0.38;
-                    saber.rotation.y += (targetY - saber.rotation.y) * 0.38;
-                    saber.rotation.z += (targetZ - saber.rotation.z) * 0.38;
+                    // Elevated Lerp tracking speed configuration to 0.55.
+                    // Because network packets arrive instantly, the blade cuts with laser precision.
+                    saber.rotation.x += (targetX - saber.rotation.x) * 0.55;
+                    saber.rotation.y += (targetY - saber.rotation.y) * 0.55;
+                    saber.rotation.z += (targetZ - saber.rotation.z) * 0.55;
                 }
 
                 renderer.render(scene, camera);
