@@ -3,35 +3,35 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VR Saber Bridge - Ultra Smooth Mirror Edition</title>
+    <title>VR Saber - Zero Lag Target Grip Edition</title>
     <style>
         body { 
-            margin: 0; overflow: hidden; background: #111; 
+            margin: 0; overflow: hidden; background: #050505; 
             color: #00ffff; font-family: 'Courier New', Courier, monospace; 
             display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;
         }
         #ui-container {
-            background: rgba(0, 20, 20, 0.8); padding: 20px; border: 1px solid #00ffff; border-radius: 10px;
-            text-align: center; z-index: 10; max-width: 400px; width: 90%;
+            background: rgba(0, 10, 10, 0.9); padding: 25px; border: 2px solid #00ffff; border-radius: 12px;
+            text-align: center; z-index: 10; max-width: 420px; width: 90%; box-shadow: 0 0 20px #00ffff44;
         }
         button {
             background: rgba(0, 255, 255, 0.1); color: #00ffff; border: 1px solid #00ffff;
-            padding: 12px 24px; margin: 10px; cursor: pointer; font-size: 16px; font-weight: bold;
-            text-transform: uppercase; transition: 0.2s;
+            padding: 14px 28px; margin: 15px 0; cursor: pointer; font-size: 16px; font-weight: bold;
+            text-transform: uppercase; letter-spacing: 2px; transition: 0.2s; width: 100%;
         }
-        button:hover { background: #00ffff; color: #000; }
+        button:hover { background: #00ffff; color: #000; box-shadow: 0 0 15px #00ffff; }
         input {
             background: #000; color: #00ffff; border: 1px solid #00ffff;
-            padding: 15px; margin: 10px 0; width: 60%; text-align: center; font-size: 24px; font-weight: bold;
-            letter-spacing: 5px;
+            padding: 15px; margin: 15px 0; width: 70%; text-align: center; font-size: 28px; font-weight: bold;
+            letter-spacing: 8px;
         }
         input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-        
+        .instruction-box { background: rgba(255,255,255,0.05); padding: 10px; margin: 15px 0; font-size: 13px; text-align: left; color: #fff;}
         #game-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; }
         #debug-overlay { 
             position: absolute; top: 10px; left: 10px; color: #00ff00; 
-            font-size: 14px; z-index: 20; pointer-events: none; display: none;
-            background: rgba(0,0,0,0.5); padding: 10px;
+            font-size: 12px; z-index: 20; pointer-events: none; display: none;
+            background: rgba(0,0,0,0.7); padding: 10px; border: 1px solid #00ff00;
         }
         .hidden { display: none !important; }
     </style>
@@ -41,54 +41,66 @@
 <body>
 
     <div id="ui-container">
-        <h1>SABER SMOOTH BRIDGE</h1>
+        <h1>SABER REALTIME</h1>
         <div id="step-1">
-            <p>Select your device role:</p>
-            <button onclick="startPCMode()">I am the Screen (PC)</button><br>
-            <button onclick="startPhoneMode()">I am the Saber (Phone)</button>
+            <p>Select device role:</p>
+            <button onclick="startPCMode()">Set Up Desktop Screen</button>
+            <button onclick="startPhoneMode()">Set Up Phone Saber</button>
         </div>
 
         <div id="pc-ui" class="hidden">
-            <p>Connecting to Cloud Server...</p>
+            <p>Connecting to Realtime Pipeline...</p>
             <div id="pc-ready" class="hidden">
                 <p>Enter this PIN on your phone:</p>
-                <h1 id="pc-id" style="color: #fff; background: #222; padding: 20px; font-size: 48px; margin: 10px 0;">----</h1>
+                <h1 id="pc-id" style="color: #fff; background: #111; padding: 15px; font-size: 54px; margin: 10px 0; border: 1px dashed #00ffff;">----</h1>
+                <p style="font-size: 12px; color: #aaa;">Hold phone in sword grip before connecting!</p>
             </div>
         </div>
 
         <div id="phone-ui" class="hidden">
-            <p>Enter the 4-digit PIN from your PC:</p>
+            <div class="instruction-box">
+                <strong>SWORD GRIP REQUIREMENT:</strong><br>
+                1. Point top of phone directly at your PC screen.<br>
+                2. Turn phone so <strong>Power Button faces UP</strong>.<br>
+                3. The phone screen must face to your <strong>LEFT</strong>.<br>
+                Hold this pose steady and click connect!
+            </div>
             <input type="number" id="target-id" placeholder="1234">
-            <button id="connect-btn" onclick="connectToPC()">Connect</button>
-            <p id="phone-status" style="font-size: 14px; color: #ffeb3b; margin-top: 20px; white-space: pre-wrap;"></p>
+            <button id="connect-btn" onclick="connectToPC()">Connect & Calibrate</button>
+            <p id="phone-status" style="font-size: 14px; color: #ffeb3b; margin-top: 15px; white-space: pre-wrap;"></p>
         </div>
     </div>
 
     <div id="game-container"></div>
-    <div id="debug-overlay">Interpolating server packets...</div>
+    <div id="debug-overlay">Awaiting sensor calibration...</div>
 
     <script>
         let client;
         let currentTopic = "";
         
-        // Target variables used to interpolate and smooth out lagging network packets
+        // Realtime rotational calculation targets
         let targetX = 0, targetY = 0, targetZ = 0;
+        
+        // Calibration Baselines
+        let calibrated = false;
+        let baseAlpha = 0, baseBeta = 0, baseGamma = 0;
 
-        // --- 1. PC (SCREEN) LOGIC ---
+        // --- 1. DESKTOP SCREEN LOGIC ---
         function startPCMode() {
             document.getElementById('step-1').classList.add('hidden');
             document.getElementById('pc-ui').classList.remove('hidden');
             
             const pin = Math.floor(1000 + Math.random() * 9000);
             document.getElementById('pc-id').innerText = pin;
-            currentTopic = "vrsaber/room/" + pin;
+            currentTopic = "vrsaber/stream/" + pin;
 
+            // Connect directly to high-speed secure cloud server cluster
             client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
 
             client.on('connect', function () {
-                document.getElementById('pc-ui').firstElementChild.innerText = "Cloud Connection Established!";
+                document.getElementById('pc-ui').firstElementChild.innerText = "Network Engine Online.";
                 document.getElementById('pc-ready').classList.remove('hidden');
-                client.subscribe(currentTopic);
+                client.subscribe(currentTopic, { qos: 0 });
             });
 
             client.on('message', function (topic, message) {
@@ -100,22 +112,45 @@
                         init3DScene();
                     }
 
-                    try {
-                        const data = JSON.parse(message.toString());
-                        
-                        // MIRROR FIX: Inverted the mathematical signs (+/-) on the geometric mappings 
-                        // so left matches left and right matches right relative to the monitor perspective.
-                        targetX = THREE.MathUtils.degToRad(data.beta);   // Pitch
-                        targetZ = THREE.MathUtils.degToRad(data.gamma);  // Mirrored Roll
-                        targetY = THREE.MathUtils.degToRad(-data.alpha); // Mirrored Yaw
-                        
-                        document.getElementById('debug-overlay').innerText = `Smooth Cache Syncing...\nTarget Pitch: ${Math.round(data.beta)}°\nTarget Roll: ${Math.round(data.gamma)}°`;
-                    } catch(e) { console.error("Data parse error", e); }
+                    // Explode ultra-lightweight data string instantly
+                    const dataParts = message.toString().split(',');
+                    if (dataParts.length === 3) {
+                        const alpha = parseFloat(dataParts[0]);
+                        const beta = parseFloat(dataParts[1]);
+                        const gamma = parseFloat(dataParts[2]);
+
+                        // Run automatic orientation zeroing calibration on first packet burst
+                        if (!calibrated) {
+                            baseAlpha = alpha;
+                            baseBeta = beta;
+                            baseGamma = gamma;
+                            calibrated = true;
+                        }
+
+                        // Calculate relative travel offsets away from your physical holding pose
+                        let diffAlpha = alpha - baseAlpha;
+                        let diffBeta = beta - baseBeta;
+                        let diffGamma = gamma - baseGamma;
+
+                        // Shield alignment from compass 360-degree wrapping glitches
+                        if (diffAlpha > 180) diffAlpha -= 360;
+                        if (diffAlpha < -180) diffAlpha += 360;
+
+                        // REMAPPED STRUCT FOR GRIP: Top pointing forward, Power button UP, Screen LEFT
+                        // Moving hand left/right rotates around vertical axis (controlled cleanly by phone beta)
+                        targetY = THREE.MathUtils.degToRad(-diffBeta * 1.5); // Amplified mirror response
+                        // Moving hand up/down rotates around lateral axis (controlled cleanly by phone alpha)
+                        targetX = THREE.MathUtils.degToRad(diffAlpha * 1.5);
+                        // Twisting your wrist rolls the blade
+                        targetZ = THREE.MathUtils.degToRad(diffGamma);
+
+                        document.getElementById('debug-overlay').innerText = `REALTIME STREAM ACTIVE\nTracking Axis Pitch: ${Math.round(diffAlpha)}°\nTracking Axis Mirror Yaw: ${Math.round(-diffBeta)}°`;
+                    }
                 }
             });
         }
 
-        // --- 2. PHONE (SABER) LOGIC ---
+        // --- 2. PHONE SABER LOGIC ---
         function startPhoneMode() {
             document.getElementById('step-1').classList.add('hidden');
             document.getElementById('phone-ui').classList.remove('hidden');
@@ -124,12 +159,12 @@
         function connectToPC() {
             const enteredPin = document.getElementById('target-id').value.trim();
             if (enteredPin.length !== 4) {
-                alert("Please enter a valid 4-digit PIN.");
+                alert("Please enter your 4-digit Screen PIN.");
                 return;
             }
 
             const statusText = document.getElementById('phone-status');
-            statusText.innerText = "Initializing connection parameters...";
+            statusText.innerText = "Configuring pipeline coordinates...";
 
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 DeviceOrientationEvent.requestPermission()
@@ -137,106 +172,109 @@
                         if (permissionState === 'granted') {
                             initiateCloudConnection(enteredPin, statusText);
                         } else {
-                            statusText.innerText = "Permission Denied: Cannot access gyro.";
+                            statusText.innerText = "Error: Motion access denied.";
                         }
                     })
-                    .catch(err => { statusText.innerText = "Sensor Error: " + err; });
+                    .catch(err => { statusText.innerText = "Hardware Fault: " + err; });
             } else {
                 initiateCloudConnection(enteredPin, statusText);
             }
         }
 
         function initiateCloudConnection(pin, statusText) {
-            statusText.innerText = "Reaching out to cloud server...";
-            currentTopic = "vrsaber/room/" + pin;
+            statusText.innerText = "Establishing direct stream linking...";
+            currentTopic = "vrsaber/stream/" + pin;
 
             client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
 
             client.on('connect', function () {
-                statusText.innerText = "Connected! Saber Mirror Active.\nSwing your phone smoothly.";
+                statusText.innerText = "LINK ESTABLISHED!\nKeep holding your pose, tracking is fully synchronized.";
                 document.getElementById('connect-btn').classList.add('hidden');
                 document.getElementById('target-id').classList.add('hidden');
+                document.querySelector('.instruction-box').classList.add('hidden');
                 
-                startSendingMotionData(statusText);
-            });
-
-            client.on('error', function (err) {
-                statusText.innerText = "Could not establish server pipeline: " + err;
+                startSendingMotionData();
             });
         }
 
         let lastSent = 0;
-        const sendInterval = 16; // Upgraded transmission rate to 60hz (16ms) for extreme precision
-
-        function startSendingMotionData(statusText) {
+        function startSendingMotionData() {
             window.addEventListener('deviceorientation', (event) => {
                 const now = Date.now();
-                if (now - lastSent < sendInterval) return; 
+                // Send data immediately every 16ms (Native 60Hz processing speed)
+                if (now - lastSent < 16) return; 
                 lastSent = now;
 
                 if (client && client.connected) {
-                    const payload = JSON.stringify({
-                        alpha: event.alpha || 0,
-                        beta: event.beta || 0,
-                        gamma: event.gamma || 0
-                    });
-                    client.publish(currentTopic, payload, { qos: 0 }); // QoS 0 avoids network overhead/delivery lag
-                    statusText.innerText = `Streaming Matrix...\n\nPitch: ${Math.round(event.beta || 0)}°\nRoll: ${Math.round(event.gamma || 0)}°`;
+                    // Send optimized string structure rather than bloated JSON brackets
+                    const payload = `${(event.alpha || 0).toFixed(1)},${(event.beta || 0).toFixed(1)},${(event.gamma || 0).toFixed(1)}`;
+                    client.publish(currentTopic, payload, { qos: 0 });
                 }
             });
         }
 
-        // --- 3. 3D SCENE LOGIC (PC ONLY) ---
+        // --- 3. 3D PERFORMANCE SCENE ENGINE (PC ONLY) ---
         let scene, camera, renderer, saber;
 
         function init3DScene() {
             const container = document.getElementById('game-container');
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.set(0, 1.5, 4);
+            camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            // Move camera slightly back to view the full sweep of your forward weapon strikes
+            camera.position.set(0, 1.6, 3.5);
 
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
             renderer.setSize(window.innerWidth, window.innerHeight);
             container.appendChild(renderer.domElement);
 
-            const light = new THREE.AmbientLight(0x404040); 
+            const light = new THREE.AmbientLight(0xffffff, 0.3); 
             scene.add(light);
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
-            directionalLight.position.set(0, 1, 1);
+            const directionalLight = new THREE.DirectionalLight(0x00ffff, 0.8);
+            directionalLight.position.set(0, 5, 5);
             scene.add(directionalLight);
 
             const saberGroup = new THREE.Group();
             
-            const handleGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.5, 16);
-            const handleMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            const handleGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.4, 16);
+            const handleMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5 });
             const handle = new THREE.Mesh(handleGeo, handleMat);
-            handle.position.y = 0.25; 
+            handle.position.y = 0.2; 
             
-            const bladeGeo = new THREE.CylinderGeometry(0.05, 0.05, 2.5, 16);
-            const bladeMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+            // Blade extends directly upward out of our pivot anchor
+            const bladeGeo = new THREE.CylinderGeometry(0.03, 0.03, 1.8, 16);
+            const bladeMat = new THREE.MeshBasicMaterial({ color: 0xff0055 });
             const blade = new THREE.Mesh(bladeGeo, bladeMat);
-            blade.position.y = 1.75; 
+            blade.position.y = 1.3; 
+
+            // Inner stark-white core filament for authentic saber glow look
+            const coreGeo = new THREE.CylinderGeometry(0.012, 0.012, 1.8, 16);
+            const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const core = new THREE.Mesh(coreGeo, coreMat);
+            core.position.y = 1.3;
 
             saberGroup.add(handle);
             saberGroup.add(blade);
-            saberGroup.position.set(0, 0.5, 1.5); 
+            saberGroup.add(core);
+            
+            // Point the saber group directly out forward toward the horizon
+            saberGroup.position.set(0, 1.0, 1.0); 
             scene.add(saberGroup);
             saber = saberGroup; 
 
-            const gridHelper = new THREE.GridHelper(20, 20, 0x00ffff, 0x444444);
+            const gridHelper = new THREE.GridHelper(30, 30, 0x444444, 0x222222);
             scene.add(gridHelper);
 
-            // --- ULTRA SMOOTH ANIMATION LOOP ---
+            // --- ZERO-LAG RESPONSE ANIMATION LOOP ---
             function animate() {
                 requestAnimationFrame(animate);
 
                 if (saber) {
-                    // LINEAR INTERPOLATION (LERP):
-                    // Instead of snapping instantly to target positions, we move 15% closer 
-                    // to the target rotation values on every single frame. This eliminates all latency stutter.
-                    saber.rotation.x += (targetX - saber.rotation.x) * 0.15;
-                    saber.rotation.y += (targetY - saber.rotation.y) * 0.15;
-                    saber.rotation.z += (targetZ - saber.rotation.z) * 0.15;
+                    // Elevated Lerp multiplier to 0.38 for tight, instant tracking execution
+                    // Striking movements now execute immediately without sliding or floating lag
+                    saber.rotation.x += (targetX - saber.rotation.x) * 0.38;
+                    saber.rotation.y += (targetY - saber.rotation.y) * 0.38;
+                    saber.rotation.z += (targetZ - saber.rotation.z) * 0.38;
                 }
 
                 renderer.render(scene, camera);
