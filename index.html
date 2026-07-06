@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VR Saber - Zero Latency Local Pipe</title>
+    <title>VR Saber - Realtime Firewall-Safe Link</title>
     <style>
         body { 
             margin: 0; overflow: hidden; background: #030303; 
@@ -41,7 +41,7 @@
 <body>
 
     <div id="ui-container">
-        <h1>SABER LOCAL PIPE</h1>
+        <h1>SABER REALTIME LINK</h1>
         <div id="step-1">
             <p>Select role over local network/hotspot:</p>
             <button onclick="startPCMode()">Initialize Screen (PC)</button>
@@ -49,9 +49,9 @@
         </div>
 
         <div id="pc-ui" class="hidden">
-            <p id="pc-status">Connecting to signaling network...</p>
+            <p id="pc-status">Connecting to firewall-safe signaling network...</p>
             <div id="pc-ready" class="hidden">
-                <p>Enter this local linking PIN on your phone:</p>
+                <p>Enter this linking PIN on your phone:</p>
                 <h1 id="pc-id" style="color: #fff; background: #111; padding: 15px; font-size: 54px; margin: 10px 0; border: 1px dashed #00ffff;">----</h1>
             </div>
         </div>
@@ -65,7 +65,7 @@
                 Hold this sword stance perfectly steady and connect!
             </div>
             <input type="number" id="target-id" placeholder="1234">
-            <button id="connect-btn" onclick="connectToPC()">Connect Direct Pipe</button>
+            <button id="connect-btn" onclick="connectToPC()">Connect Realtime Saber</button>
             <p id="phone-status" style="font-size: 14px; color: #ffeb3b; margin-top: 15px; white-space: pre-wrap;"></p>
         </div>
     </div>
@@ -78,6 +78,14 @@
         let rtcPeer;
         let localDataChannel;
         let currentTopic = "";
+        let sensorTopic = "";
+        let usingRelayFallback = false;
+        let relayWatchdog;
+        let sceneStarted = false;
+        let sensorStreamStarted = false;
+
+        const RELAY_FALLBACK_TIMEOUT_MS = 3500;
+        const SENSOR_INTERVAL_MS = 16; // ~60Hz is stable on Android 8 devices and still feels realtime.
         
         let targetX = 0, targetY = 0, targetZ = 0;
         let calibrated = false;
@@ -93,18 +101,25 @@
             const pin = Math.floor(1000 + Math.random() * 9000);
             document.getElementById('pc-id').innerText = pin;
             currentTopic = "vrsaber/rtc/" + pin;
+            sensorTopic = currentTopic + "/sensor_stream";
 
-            mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+            mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt', { reconnectPeriod: 1000 });
 
             mqttClient.on('connect', function () {
                 document.getElementById('pc-status').innerText = "Signaler ready. Awaiting phone sync...";
                 document.getElementById('pc-ready').classList.remove('hidden');
                 mqttClient.subscribe(currentTopic + "/phone_to_pc");
+                mqttClient.subscribe(sensorTopic);
             });
 
             mqttClient.on('message', function (topic, message) {
                 let msgData;
                 try { msgData = JSON.parse(message.toString()); } catch(e) { msgData = message.toString(); }
+
+                if (topic === sensorTopic) {
+                    handleSensorPacket(message.toString(), "WSS RELAY FALLBACK (firewall-safe realtime)");
+                    return;
+                }
 
                 if (msgData === "LAUNCH_HANDSHAKE") {
                     setupPCWebRTC();
@@ -123,40 +138,23 @@
             localDataChannel = rtcPeer.createDataChannel("saberPipe", { ordered: false, maxRetransmits: 0 });
             
             localDataChannel.onopen = () => {
-                mqttClient.end(); // Kill cloud server connection completely! We are entirely local now.
-                document.getElementById('ui-container').classList.add('hidden');
-                document.getElementById('game-container').style.display = 'block';
-                document.getElementById('debug-overlay').style.display = 'block';
-                init3DScene();
+                usingRelayFallback = false;
+                clearTimeout(relayWatchdog);
+                mqttClient.unsubscribe(sensorTopic);
+                showGameScene();
             };
 
             localDataChannel.onmessage = (event) => {
-                const parts = event.data.split(',');
-                if (parts.length === 3) {
-                    const alpha = parseFloat(parts[0]);
-                    const beta = parseFloat(parts[1]);
-                    const gamma = parseFloat(parts[2]);
-
-                    if (!calibrated) {
-                        baseAlpha = alpha; baseBeta = beta; baseGamma = gamma;
-                        calibrated = true;
-                    }
-
-                    let dAlpha = alpha - baseAlpha;
-                    let dBeta = beta - baseBeta;
-                    let dGamma = gamma - baseGamma;
-
-                    if (dAlpha > 180) dAlpha -= 360;
-                    if (dAlpha < -180) dAlpha += 360;
-
-                    // AXIS REMAPPING FOR YOUR GRIP: Power Button UP, Screen LEFT, Top FORWARD
-                    targetX = THREE.MathUtils.degToRad(-dGamma * 2.0); // Pitch (Up/Down) via side tilt
-                    targetY = THREE.MathUtils.degToRad(-dAlpha * 2.0); // Mirrored Yaw (Left/Right) via rotation
-                    targetZ = THREE.MathUtils.degToRad(dBeta);        // Roll (Blade twist)
-
-                    document.getElementById('debug-overlay').innerText = `DIRECT LOCAL UDP LINK (0ms Cloud Lag)\nPitch: ${Math.round(-dGamma)}°\nYaw (Mirror): ${Math.round(-dAlpha)}°`;
-                }
+                handleSensorPacket(event.data, "DIRECT LOCAL UDP LINK");
             };
+
+            relayWatchdog = setTimeout(() => {
+                if (!localDataChannel || localDataChannel.readyState !== "open") {
+                    usingRelayFallback = true;
+                    document.getElementById('pc-status').innerText = "Firewall blocked direct WebRTC. Using WSS relay realtime mode...";
+                    showGameScene();
+                }
+            }, RELAY_FALLBACK_TIMEOUT_MS);
 
             rtcPeer.onicecandidate = (e) => {
                 if (e.candidate) {
@@ -168,6 +166,45 @@
                 rtcPeer.setLocalDescription(offer);
                 mqttClient.publish(currentTopic + "/pc_to_phone", JSON.stringify(offer));
             });
+        }
+
+        function showGameScene() {
+            document.getElementById('ui-container').classList.add('hidden');
+            document.getElementById('game-container').style.display = 'block';
+            document.getElementById('debug-overlay').style.display = 'block';
+            if (!sceneStarted) {
+                sceneStarted = true;
+                init3DScene();
+            }
+        }
+
+        function handleSensorPacket(packet, linkLabel) {
+            const parts = packet.split(',');
+            if (parts.length !== 3) return;
+
+            const alpha = parseFloat(parts[0]);
+            const beta = parseFloat(parts[1]);
+            const gamma = parseFloat(parts[2]);
+            if ([alpha, beta, gamma].some(Number.isNaN)) return;
+
+            if (!calibrated) {
+                baseAlpha = alpha; baseBeta = beta; baseGamma = gamma;
+                calibrated = true;
+            }
+
+            let dAlpha = alpha - baseAlpha;
+            const dBeta = beta - baseBeta;
+            const dGamma = gamma - baseGamma;
+
+            if (dAlpha > 180) dAlpha -= 360;
+            if (dAlpha < -180) dAlpha += 360;
+
+            // AXIS REMAPPING FOR YOUR GRIP: Power Button UP, Screen LEFT, Top FORWARD
+            targetX = THREE.MathUtils.degToRad(-dGamma * 2.0); // Pitch (Up/Down) via side tilt
+            targetY = THREE.MathUtils.degToRad(-dAlpha * 2.0); // Mirrored Yaw (Left/Right) via rotation
+            targetZ = THREE.MathUtils.degToRad(dBeta);        // Roll (Blade twist)
+
+            document.getElementById('debug-overlay').innerText = `${linkLabel}\nPitch: ${Math.round(-dGamma)}°\nYaw (Mirror): ${Math.round(-dAlpha)}°`;
         }
 
         // --- 2. PHONE (SABER) ARCHITECTURE ---
@@ -196,7 +233,8 @@
 
         function initiateHandshake(pin, statusText) {
             currentTopic = "vrsaber/rtc/" + pin;
-            mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+            sensorTopic = currentTopic + "/sensor_stream";
+            mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt', { reconnectPeriod: 1000 });
 
             mqttClient.on('connect', function () {
                 statusText.innerText = "Handshaking with PC browser over WebRTC...";
@@ -221,13 +259,24 @@
             rtcPeer.ondatachannel = (event) => {
                 localDataChannel = event.channel;
                 localDataChannel.onopen = () => {
-                    mqttClient.end(); // Disconnect cloud signaling. Completely local data streaming active now.
-                    statusText.innerText = "LOCAL UDP PIPE ATTACHED!\nCloud processing bypassed successfully.";
+                    usingRelayFallback = false;
+                    statusText.innerText = "LOCAL UDP PIPE ATTACHED!\nRealtime motion active.";
                     document.getElementById('connect-btn').classList.add('hidden');
                     document.getElementById('target-id').classList.add('hidden');
                     document.querySelector('.grip-box').classList.add('hidden');
-                    streamSaberCoordinates();
+                    streamSaberCoordinates(statusText);
                 };
+
+                setTimeout(() => {
+                    if (!localDataChannel || localDataChannel.readyState !== "open") {
+                        usingRelayFallback = true;
+                        statusText.innerText = "Direct WebRTC is blocked by firewall/NAT.\nUsing firewall-safe WSS relay realtime mode.";
+                        document.getElementById('connect-btn').classList.add('hidden');
+                        document.getElementById('target-id').classList.add('hidden');
+                        document.querySelector('.grip-box').classList.add('hidden');
+                        streamSaberCoordinates(statusText);
+                    }
+                }, RELAY_FALLBACK_TIMEOUT_MS);
             };
 
             rtcPeer.onicecandidate = (e) => {
@@ -243,18 +292,35 @@
             });
         }
 
-        function streamSaberCoordinates() {
+        function streamSaberCoordinates(statusText) {
+            if (sensorStreamStarted) return;
+            sensorStreamStarted = true;
             let lastSent = 0;
+            let sensorSeen = false;
+
+            const noSensorTimer = setTimeout(() => {
+                if (!sensorSeen) {
+                    statusText.innerText += "\nNo motion sensor events yet. On Vivo Y93/Android 8, open this page in Chrome over HTTPS and keep rotation sensors enabled.";
+                }
+            }, 2500);
+
             window.addEventListener('deviceorientation', (event) => {
+                sensorSeen = true;
+                clearTimeout(noSensorTimer);
+
                 const now = Date.now();
-                if (now - lastSent < 8) return; // Blazing fast 120Hz polling execution clock
+                if (now - lastSent < SENSOR_INTERVAL_MS) return;
                 lastSent = now;
 
+                const packet = `${(event.alpha || 0).toFixed(1)},${(event.beta || 0).toFixed(1)},${(event.gamma || 0).toFixed(1)}`;
+
                 if (localDataChannel && localDataChannel.readyState === "open") {
-                    const packet = `${(event.alpha || 0).toFixed(1)},${(event.beta || 0).toFixed(1)},${(event.gamma || 0).toFixed(1)}`;
-                    localDataChannel.send(packet); // Pushed straight through local network hardware
+                    localDataChannel.send(packet);
+                } else if (mqttClient && mqttClient.connected) {
+                    usingRelayFallback = true;
+                    mqttClient.publish(sensorTopic, packet, { qos: 0 });
                 }
-            });
+            }, { passive: true });
         }
 
         // --- 3. 3D PERFORMANCE SCENE ENGINE (PC ONLY) ---
